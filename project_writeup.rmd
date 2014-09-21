@@ -1,0 +1,212 @@
+---
+title: "Project Writeup"
+author: "Felipe Navarrete"
+date: "Sunday, September 21, 2014"
+output: html_document
+---
+
+Loading the necessary libraries
+
+```{r}
+library(rpart)
+library(randomForest)
+library(caret)
+library(e1071)
+```
+
+Setting the working directory. IT HAS TO BE CHANGED TO THE FOLDER
+WHERE THE DATA IS STORED (otherwise the script cannot run)
+
+```{r}
+setwd("C:/COURSERA/2014/PracticalMachineLearning/ProjectWriteup")
+```
+
+The training and testing data sets are read
+
+```{r}
+training <- read.csv("pml-training.csv",header=TRUE,stringsAsFactors=FALSE)
+testing <- read.csv("pml-testing.csv",header=TRUE,stringsAsFactors=FALSE)
+```
+
+The training dataset is splitted in training (60% of the data) and validation (40% of the data) sets. 
+
+```{r}
+inTrain <- createDataPartition(y=training$classe,p=0.6,list=FALSE)
+
+training <- training[inTrain,]
+validation <- training[-inTrain,]
+```
+
+The data classe classifier is plotted against index.
+It is clear the step-like pattern, which could be indicative of a missing feature.
+
+```{r}
+length(training$classe)
+index <- seq(1,length(training$classe))
+qplot(index,classe,data=training,na.rm=TRUE)
+```
+
+We check if this correlated with the user name by using a color code for each name.
+We see that that is not the case
+
+```{r, echo=FALSE}
+qplot(X,classe,data=training,na.rm=TRUE,color=user_name)
+```
+
+The data has to be pre-processed before having fun.
+The first obvious thing that pops-out from the data is that there are a lot of features, and that many of these features have values NA
+
+```{r}
+head(training,n=15)
+```
+
+
+I iterate over all the variables to find out which are mainly composed of NA values (> 50%)and remove them. Also I have checked in the variables  of type 'character' the empty entries, i.e, ''. If more than 50% of the values are empty entries, the feature is removed from the final sample.
+
+```{r}
+ratio <- double()
+keeps <- character()
+count=1
+
+for (i in names(training)) {
+    new <- is.na(training[[i]])
+    newratio = (length(training$X[new]))/(length(training[[i]]))
+    ratio <- c(ratio,newratio)
+    if (newratio <= 0.5 && typeof(training[[i]]) != 'character'){
+        newkeep = i
+        keeps <- c(keeps,newkeep)
+    }
+    if (typeof(training[[i]]) == 'character'){
+        num_empty = sum(training[[i]] == '')
+        newratio = num_empty/(length(training[[i]]))
+        if (newratio <= 0.5){
+            newkeep = i
+            keeps <- c(keeps,newkeep)
+        }        
+     }
+    count=count+1
+}
+```
+
+The variable "keeps"" contains all the features that have to be removed from the original training set.
+
+```{r}
+training2 <- training[keeps]
+validation2 <- validation[keeps] 
+testing2 <- testing[keeps[-60]]
+```
+
+Identifying the type of each feature in the data
+
+```{r}
+var <- sapply(training2,class)
+```
+
+We remove some features that we do not consider will be important 
+in order to classify the exercise, e.g., X, user_name, etc.
+
+```{r}
+var2 = which(var == 'character')
+
+training3 <- training2[,-var2]
+validation3 <- validation2[,-var2]
+testing3 <- testing2[,-var2[-4]]
+
+subset <-  c(names(training3),names(training2)[60])
+
+training4 <- training2[subset]
+training4 <- training4[,5:57]
+validation4 <- validation2[subset]
+validation4 <- validation4[,5:57]
+testing4 <- testing2[subset[-57]]
+testing4 <- testing4[,5:56]
+
+```
+
+We end up with 53 features after all this filtering.
+
+We try to identify those variables that have near zero variance in order to remove them
+
+```{r}
+nsv <- nearZeroVar(training4,saveMetrics=TRUE)
+nsv
+```
+None of the remaining features falls in the near zero variance class, so nothing is removed
+at this step.
+
+
+We check how correlated are the remaining variables
+
+```{r}
+M <- abs(cor(training4[-53]))
+```
+
+The terms of the diagonal are set to zero as the correlation of a variable with itself is 1
+```{r}
+diag(M) <- 0
+```
+
+We check all the variables that have a correlation values greater than 0.8
+
+```{r}
+which(M > 0.8,arr.ind=T)
+```
+
+This is how it looks a scatter plot of two variables highly correlated.
+
+```{r, echo=FALSE}
+plot(training4$yaw_dumbbell,training4$accel_dumbbell_z)
+```
+
+before fitting a model we convert the 'classe' variable to a factor type
+
+```{r}
+training4$classe <- as.factor(training4$classe)
+validation4$classe <- as.factor(validation4$classe)
+fitControl <- trainControl(repeats = 5)
+```
+
+As there are many variables that have a high correlation the data is pre-processed with the principal component analysis method.
+
+In order to reduce the parameter space, we choose the componentst that account for 80% of the variance, i.e, 12 components.
+
+```{r}
+preProc <- preProcess(training4[,-53],method='pca',thresh=0.8) 
+preProc
+```
+
+The found solution is applied to the training, validation, and test sets.
+
+```{r}
+trainPC <- predict(preProc,training4[-53])
+validationPC <- predict(preProc,validation4[-53])
+testingPC <- predict(preProc,testing4) 
+```
+
+Finally the training set is modeled with the random forest method.
+The training set is bootstrapped 25 times in order to cross validate
+and average the errors.
+
+```{r}
+modelFit <- train(training4$classe ~ .,method='rf',data=trainPC,trControl=fitControl) 
+modelFit
+```
+
+We obtain a high accuracy ~ 92%
+
+The prediction is computed on the validation set.
+
+```{r}
+mod_pred <- predict(modelFit,validationPC)
+ind <- mod_pred == validation4$classe
+length(which(ind))/length(mod_pred)
+```
+
+The accuracy is within what is expected from what we obtained with the training data set.
+
+Finally, the prediction for the test data set are computed and submitted.
+
+```{r}
+test_prediction <- predict(modelFit,testingPC)
+```
+
